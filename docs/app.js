@@ -17,6 +17,7 @@ const state = {
   status: "playing",
   kb: {},
   shareUrl: "",
+  mode: null, // local | remote
 };
 let dict = new Set();
 
@@ -100,6 +101,7 @@ function goHome() {
     status: "playing",
     kb: {},
     shareUrl: "",
+    mode: null,
   });
   render();
 }
@@ -148,11 +150,56 @@ function paintHome() {
     <div class="home" style="display:flex;flex-direction:column;flex:1">
     ${header()}
     <div class="hero">
-      <p class="lede">El anfitrión elige la palabra. El resto juega.</p>
+      <p class="lede">¿Cómo juegan?</p>
+    </div>
+    <div class="stack">
+      <button class="btn primary" data-go="local">Mismo dispositivo</button>
+      <button class="btn ghost" data-go="remote">A distancia</button>
+    </div>
+    <p class="sub" style="text-align:center;margin-top:16px;color:var(--muted)">Un teléfono se pasa, o un link se manda.</p>
+    </div>`;
+}
+
+function paintRemote() {
+  app.innerHTML = `
+    ${header(`<button class="link" data-go="home">Volver</button>`)}
+    <div class="hero">
+      <p class="lede">Sala con link.</p>
+      <p class="sub">Uno elige la palabra, el otro abre el link.</p>
     </div>
     <div class="stack">
       <button class="btn primary" data-go="create">Crear sala</button>
       <button class="btn ghost" data-go="join">Unirse con código</button>
+    </div>`;
+}
+
+function paintLocalWord() {
+  app.innerHTML = `
+    ${header(`<button class="link" data-go="home">Volver</button>`)}
+    <div class="hero">
+      <p class="lede">Escribí la palabra. El otro no mira.</p>
+      <p class="sub">De 4 a 8 letras. Después se oculta y se pasa el teléfono.</p>
+    </div>
+    <form class="stack" id="local-form">
+      <label class="field">Palabra
+        <input class="word" name="word" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="12" placeholder="•••••" />
+      </label>
+      <p class="msg">${escapeHtml(state.error)}</p>
+      <button class="btn primary" type="submit">Listo</button>
+    </form>`;
+  app.querySelector("input")?.focus();
+}
+
+function paintHandoff() {
+  app.innerHTML = `
+    <div class="home" style="display:flex;flex-direction:column;flex:1">
+    ${header()}
+    <div class="hero">
+      <p class="lede">Pasá el teléfono.</p>
+      <p class="sub">La palabra ya no se ve.</p>
+    </div>
+    <div class="stack">
+      <button class="btn primary" data-go="handoff-play">Adivinar</button>
     </div>
     </div>`;
 }
@@ -211,8 +258,9 @@ function endCopy() {
 
 function paintPlay() {
   const end = state.status === "won" || state.status === "lost";
+  const title = state.mode === "local" ? "Worldly" : `Salón ${state.code}`;
   app.innerHTML = `
-    ${header(`<button class="link" data-go="home">Salir</button>`, `Salón ${state.code}`)}
+    ${header(`<button class="link" data-go="home">Salir</button>`, title)}
     <p class="status-line">${end ? endCopy() : `${MAX_ATTEMPTS - state.guesses.length} intento${MAX_ATTEMPTS - state.guesses.length === 1 ? "" : "s"}`}</p>
     ${renderGrid()}
     ${end ? `<div class="end"><h2>${state.status === "won" ? "¡Bien!" : "Casi"}</h2><p>La palabra era</p><p class="secret">${escapeHtml(state.secret)}</p></div>` : ""}
@@ -222,6 +270,9 @@ function paintPlay() {
 
 function render() {
   if (state.view === "home") paintHome();
+  else if (state.view === "remote") paintRemote();
+  else if (state.view === "local-word") paintLocalWord();
+  else if (state.view === "handoff") paintHandoff();
   else if (state.view === "create") paintCreate();
   else if (state.view === "host") paintHost();
   else if (state.view === "join") paintJoin();
@@ -241,24 +292,48 @@ function rebuildKb() {
   state.kb = kb;
 }
 
+function setSecret(word) {
+  const w = onlyLetters(word);
+  if (w.length < 4 || w.length > 8) return { error: "De 4 a 8 letras." };
+  if (!dict.has(w)) return { error: "Esa no está en el diccionario." };
+  return { word: w };
+}
+
+function beginLocal(word) {
+  state.error = "";
+  const got = setSecret(word);
+  if (got.error) {
+    state.error = got.error;
+    render();
+    return;
+  }
+  state.secret = got.word;
+  state.length = got.word.length;
+  state.code = "";
+  state.guesses = [];
+  state.draft = "";
+  state.status = "playing";
+  state.kb = {};
+  state.mode = "local";
+  state.view = "handoff";
+  render();
+}
+
 function createRoom(word) {
   state.error = "";
-  const w = onlyLetters(word);
-  if (w.length < 4 || w.length > 8) {
-    state.error = "De 4 a 8 letras.";
+  const got = setSecret(word);
+  if (got.error) {
+    state.error = got.error;
     render();
     return;
   }
-  if (!dict.has(w)) {
-    state.error = "Esa no está en el diccionario.";
-    render();
-    return;
-  }
+  const w = got.word;
   const code = encodeWord(w);
   state.secret = w;
   state.code = code;
   state.length = w.length;
   state.shareUrl = `${shareBase()}#${code}`;
+  state.mode = "remote";
   state.view = "host";
   render();
 }
@@ -278,6 +353,7 @@ function startPlay(code) {
   state.draft = "";
   state.status = "playing";
   state.kb = {};
+  state.mode = "remote";
   state.view = "play";
   history.replaceState(null, "", `${shareBase()}#${state.code}`);
   render();
@@ -333,6 +409,18 @@ app.addEventListener("click", async (ev) => {
   }
   const go = ev.target.closest("[data-go]")?.dataset.go;
   if (go === "home") goHome();
+  if (go === "local") {
+    state.mode = "local";
+    state.view = "local-word";
+    state.error = "";
+    render();
+  }
+  if (go === "remote") {
+    state.mode = "remote";
+    state.view = "remote";
+    state.error = "";
+    render();
+  }
   if (go === "create") {
     state.view = "create";
     state.error = "";
@@ -343,12 +431,21 @@ app.addEventListener("click", async (ev) => {
     state.error = "";
     render();
   }
+  if (go === "handoff-play") {
+    state.view = "play";
+    state.status = "playing";
+    render();
+  }
   const key = ev.target.closest("[data-key]")?.dataset.key;
   if (key) onKey(key);
 });
 
 app.addEventListener("submit", (ev) => {
   ev.preventDefault();
+  if (ev.target.id === "local-form") {
+    const word = new FormData(ev.target).get("word") || "";
+    beginLocal(String(word));
+  }
   if (ev.target.id === "create-form") {
     const word = new FormData(ev.target).get("word") || "";
     createRoom(String(word));
